@@ -1,0 +1,1 @@
+INSERT INTO products(name, price, currency) VALUES('Chocolate', 10, 'USD');
