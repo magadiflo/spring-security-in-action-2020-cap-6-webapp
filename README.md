@@ -87,6 +87,7 @@ public class ProjectConfig extends WebSecurityConfigurerAdapter {
 En la clase de configuración, queremos establecer tanto la implementación de la autenticación en el método formLogin
 como la ruta /main como la URL de éxito predeterminada, como se muestra en la siguiente lista. Queremos implementar esta
 ruta como la página principal de la aplicación web.
+
 ````java
 
 @Configuration
@@ -102,3 +103,38 @@ public class ProjectConfig extends WebSecurityConfigurerAdapter {
 }
 
 ````
+
+## [Pág. 148] Implementando la página principal
+
+Finalmente, ahora que tenemos la parte de seguridad en su lugar, podemos implementar la página principal de la
+aplicación. Es una página simple que muestra todos los registros de la tabla de productos. Solo se puede acceder a esta
+página después de que el usuario inicie sesión. Para obtener los registros del producto de la base de datos, debemos
+agregar una clase de entidad Producto y una interfaz ProductRepository a nuestro proyecto. ``Recordar que hasta
+este punto ya tengo implementado cierta parte de la página main con su controlador, su entity y su repository.``
+
+Como ahora ya tenemos la funcionalidad de la autenticación, podemos acceder al **SecurityContext** para obtener
+el username autenticado y mostrarlo en el main.html. Esto lo haremos a través del Authentication agregado como parámetro
+del método main(...), recordar que Spring hace automáticamente la inyección de dependencia a dicho parámetro del método:
+
+````java
+
+@Controller
+public class MainPageController {
+
+    @Autowired
+    private ProductService productService;
+
+    @GetMapping(path = "/main")
+    public String main(Model model, Authentication authentication) {
+        model.addAttribute("username", authentication.getName());
+        model.addAttribute("products", this.productService.findAll());
+        return "main.html";
+    }
+
+}
+````
+
+**NOTA**
+> Tuve que colocar el @Bean de BCryptPasswordEncoder y del SCryptPasswordEncoder en una clase de configuración aparte,
+> porque mostraba un error de dependencia cíclica al estar estos beans dentro de la clase de configuración principal
+> de Spring Security ya que se está incluyendo el AuthenticationProviderService que también hace uso de dichos beans.
