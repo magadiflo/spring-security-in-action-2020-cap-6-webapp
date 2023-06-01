@@ -138,3 +138,167 @@ public class MainPageController {
 > Tuve que colocar el @Bean de BCryptPasswordEncoder y del SCryptPasswordEncoder en una clase de configuración aparte,
 > porque mostraba un error de dependencia cíclica al estar estos beans dentro de la clase de configuración principal
 > de Spring Security ya que se está incluyendo el AuthenticationProviderService que también hace uso de dichos beans.
+
+## TAREA: Implementar un DelegatingPasswordEncoder como se vio en el capítulo 4
+
+Para verificar que la implementación que hagamos sea correcta, aparte del BCryptPasswordEncoder, necesitamos usar otra
+forma de codificación, en nuestro caso usaremos además el SCryptPasswordEncoder.
+
+### Agregando dependencia en el pom.xml
+
+Resulta que al codificar una contraseña con SCryptPasswordEncoder, me arrojaba la siguiente excepción:
+
+````
+java.lang.NoClassDefFoundError: org/bouncycastle/crypto/generators/SCrypt
+````
+
+Según investigué: **Todo esto sucede porque la técnica de codificación utilizada se basa en la función de derivación
+de clave.SCryptPasswordEncoderscrypt**
+
+**SOLUCIÓN**
+
+Al agregar la siguiente dependencia en el archivo de compilación de su proyecto, se resolverá este problema.
+
+````xml
+
+<dependency>
+    <groupId>org.bouncycastle</groupId>
+    <artifactId>bcprov-jdk15on</artifactId>
+    <version>1.70</version>
+</dependency>
+````
+
+Ahora, crearemos un usuario que tenga este tipo de codificación y los agregamos al **import.sql**.
+
+````
+INSERT INTO users(id, username, password, algorithm) VALUES(3, 'usuario', '$e0801$V5/rB1qLny3sy2mplgkMoiarWK1gjDAx7I7zfu1Q16WNTSERBoo9y0NDNfTdUxfJ39u182z4laSu9khUMTLvzA==$B7H1w7h8+HfCB6RJ6PsUc8M/5XRIhSylAFlhxNTQSNU=', 'SCRYPT');
+INSERT INTO authorities(name, user_id) VALUES('READ', 3);
+````
+
+Listo, hasta ahora tenemos en el **import.sql** usuarios con tipo de codificación BCRYPT y SCRYPT.
+
+### Configurando el EncryptionTypesConfig
+
+Nuestra clase de configuración que tiene los @Bean de BCryptPasswordEncoder y el SCryptPasswordEncoder, serán
+reemplazadas por el **DelegatingPasswordEncoder**.
+
+Como se vio en el capítulo 4, si tenemos varias formas de codificar, el DelegatingPasswordEncoder nos será de mucha
+ayuda.
+
+Podríamos usar solo siguiente @Bean que a continuación se muestra, pero si sabemos de antemano que **solo usaremos
+dos tipos de codificación: bcrypt y el scrypt**, el código de abajo no es muy eficiente, puesto que el
+**PasswordEncoderFactories** tiene definido todas las implementaciones estándar proporcionadas de PasswordEncoder:
+
+````java
+
+@Configuration
+public class EncryptionTypesConfig {
+    @Bean
+    public PasswordEncoder passwordEncoder() {
+        return PasswordEncoderFactories.createDelegatingPasswordEncoder();
+    }
+}
+````
+
+En cambio, usaremos el siguiente código donde definimos exactamente los tipos de codificación que usaremos:
+
+````java
+
+@Configuration
+public class EncryptionTypesConfig {
+    @Bean
+    public PasswordEncoder passwordEncoder() {
+        String encodingId = "bcrypt";
+        Map<String, PasswordEncoder> encoders = new HashMap<>();
+        encoders.put(encodingId, new BCryptPasswordEncoder());
+        encoders.put("scrypt", new SCryptPasswordEncoder());
+        return new DelegatingPasswordEncoder(encodingId, encoders);
+    }
+}
+````
+
+### Modificando el enum EncryptionAlgorithm
+
+Modificamos el enum EncryptionAlgorithm para que cada codificador tenga su identificador:
+
+````java
+public enum EncryptionAlgorithm {
+    BCRYPT("bcrypt"), SCRYPT("scrypt");
+
+    private final String idForEncode;
+
+    EncryptionAlgorithm(String idForEncode) {
+        this.idForEncode = idForEncode;
+    }
+
+    public final String getIdForEncode() {
+        return this.idForEncode;
+    }
+}
+````
+
+### Modificando el AuthenticationProviderService
+
+Modificaremos ahora nuestra personalización del AuthenticationProvider, que como recordaremos contiene la lógica de
+autenticación.
+
+Lo primero será modificar el @Autowired para poder inyectar el Bean del PasswordEncoder definido en la clase
+EncryptionTypesConfig. En este caso, se tenía inyectado el BCryptPasswordEncoder y el SCryptPasswordEncoder, pero
+como ahora tenemos un solo bean, será ese el que se inyecte.
+
+Eliminamos el método que teníamos de verificación y modificamos el método authenticate(...), finalmente
+toda la clase quedaría de la siguiente manera:
+
+````java
+
+@Service
+public class AuthenticationProviderService implements AuthenticationProvider {
+    @Autowired
+    private JpaUserDetailsService userDetailsService;
+    @Autowired
+    private PasswordEncoder passwordEncoder;
+
+    @Override
+    public Authentication authenticate(Authentication authentication) throws AuthenticationException {
+        String username = authentication.getName();
+        String password = authentication.getCredentials().toString();
+
+        CustomUserDetails customUserDetails = this.userDetailsService.loadUserByUsername(username);
+        String passwordEncryptedWithEncodeType = String.format("{%s}%s", customUserDetails.getUser().getAlgorithm().getIdForEncode(), customUserDetails.getPassword());
+
+        if (this.passwordEncoder.matches(password, passwordEncryptedWithEncodeType)) {
+            return new UsernamePasswordAuthenticationToken(customUserDetails.getUsername(), customUserDetails.getPassword(), customUserDetails.getAuthorities());
+        } else {
+            throw new BadCredentialsException("Credenciales incorrectos! (el password no hace match)");
+        }
+    }
+
+    @Override
+    public boolean supports(Class<?> authentication) {
+        return UsernamePasswordAuthenticationToken.class.isAssignableFrom(authentication);
+    }
+}
+````
+
+Del código anterior, podemos ver que en el método authenticate() definimos la lógica para hacer la autenticación, además
+algo muy importante y la razón de esta tarea es que ahora necesitamos construir algo similar a esto:
+
+````
+{bcrypt}$2a$10$xn3LI/AjqicFYZFruSwve.681477XaVNaUQbr1gioaWPn4t1KsnmG
+````
+
+o también
+
+````
+{scrypt}$e0801$V5/rB1qLny3sy2mplgkMoiarWK1gjDAx7I7zfu1Q16WNTSERBoo9y0NDNfTdUxfJ39u182z4laSu9khUMTLvzA==$B7H1w7h8+HfCB6RJ6PsUc8M/5XRIhSylAFlhxNTQSNU=
+````
+
+Y eso lo logramos con el siguiente código:
+
+````
+String passwordEncryptedWithEncodeType = String.format("{%s}%s", customUserDetails.getUser().getAlgorithm().getIdForEncode(), customUserDetails.getPassword());
+````
+
+De esta forma, si un usuario ya sea que tenga el tipo de codificación **bcrypt** o **scrypt**, con la definición del
+bean donde retornamos un **DelegatingPasswordEncoder** haremos la magia, en automático este determinará el tipo de
+codificación que usará para determinar si la contraseña es válida o no.

@@ -7,9 +7,7 @@ import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.AuthenticationException;
-import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
-import org.springframework.security.crypto.scrypt.SCryptPasswordEncoder;
 import org.springframework.stereotype.Service;
 
 @Service
@@ -17,10 +15,7 @@ public class AuthenticationProviderService implements AuthenticationProvider {
     @Autowired
     private JpaUserDetailsService userDetailsService;
     @Autowired
-    private BCryptPasswordEncoder bCryptPasswordEncoder;
-    @Autowired
-    private SCryptPasswordEncoder sCryptPasswordEncoder;
-
+    private PasswordEncoder passwordEncoder;
 
     @Override
     public Authentication authenticate(Authentication authentication) throws AuthenticationException {
@@ -28,23 +23,17 @@ public class AuthenticationProviderService implements AuthenticationProvider {
         String password = authentication.getCredentials().toString();
 
         CustomUserDetails customUserDetails = this.userDetailsService.loadUserByUsername(username);
+        String passwordEncryptedWithEncodeType = String.format("{%s}%s", customUserDetails.getUser().getAlgorithm().getIdForEncode(), customUserDetails.getPassword());
 
-        return switch (customUserDetails.getUser().getAlgorithm()) {
-            case BCRYPT -> this.checkPassword(customUserDetails, password, this.bCryptPasswordEncoder);
-            case SCRYPT -> this.checkPassword(customUserDetails, password, this.sCryptPasswordEncoder);
-        };
+        if (this.passwordEncoder.matches(password, passwordEncryptedWithEncodeType)) {
+            return new UsernamePasswordAuthenticationToken(customUserDetails.getUsername(), customUserDetails.getPassword(), customUserDetails.getAuthorities());
+        } else {
+            throw new BadCredentialsException("Credenciales incorrectos! (el password no hace match)");
+        }
     }
 
     @Override
     public boolean supports(Class<?> authentication) {
         return UsernamePasswordAuthenticationToken.class.isAssignableFrom(authentication);
-    }
-
-    private Authentication checkPassword(CustomUserDetails userDetails, String rawPassword, PasswordEncoder encoder) {
-        if (encoder.matches(rawPassword, userDetails.getPassword())) {
-            return new UsernamePasswordAuthenticationToken(userDetails.getUsername(), userDetails.getPassword(), userDetails.getAuthorities());
-        } else {
-            throw new BadCredentialsException("Credenciales incorrectos! (el password no hace match)");
-        }
     }
 }
